@@ -24,6 +24,9 @@ public:
     // Snap the PI-loop state back to the ctor defaults; leaves the sample ring.
     void reset_loop();
 
+    // Back to the ctor state: loop state plus the sample ring and read position.
+    void reset();
+
 private:
     bool try_emit(Complex32& output);
 

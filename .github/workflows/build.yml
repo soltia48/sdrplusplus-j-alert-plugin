@@ -90,10 +90,18 @@ jobs:
           if [ -n "${{ matrix.cflags }}" ]; then
             ARGS+=(-DCMAKE_C_FLAGS="${{ matrix.cflags }}" -DCMAKE_CXX_FLAGS="${{ matrix.cflags }}")
           fi
+          # Unit tests run natively, so only on the x86_64 build.
+          if [ "${{ matrix.target }}" = "linux-x86_64" ]; then
+            ARGS+=(-DJALERT_BUILD_TESTS=ON)
+          fi
           cmake -B build -S . "${ARGS[@]}"
 
       - name: Build
         run: cmake --build build -j
+
+      - name: Test
+        if: matrix.target == 'linux-x86_64'
+        run: ctest --test-dir build --output-on-failure
 
       - name: Collect artefact
         run: |

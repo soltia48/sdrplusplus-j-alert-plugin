@@ -2,6 +2,7 @@
 // Feed-forward AGC. Buffers nsamples of look-ahead and emits the oldest sample
 // scaled by reference / peak-envelope-of-the-window.
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -31,6 +32,13 @@ public:
         const float gain = reference_ / max_env;
         output = Complex32(oldest.re * gain, oldest.im * gain);
         return true;
+    }
+
+    // Back to the ctor state (empty window).
+    void reset() {
+        std::fill(window_.begin(), window_.end(), Complex32());
+        head_ = 0;
+        fill_ = 0;
     }
 
 private:

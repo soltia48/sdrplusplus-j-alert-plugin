@@ -84,6 +84,13 @@ void PfbClockSync::reset_loop() {
     error_ = 0.0f;
 }
 
+void PfbClockSync::reset() {
+    reset_loop();
+    buf_ = LinkedListBuf(taps_per_arm_ + 4 * sps_);
+    read_pos_ = 0;
+    warmed_ = false;
+}
+
 bool PfbClockSync::try_emit(Complex32& output) {
     const int m = taps_per_arm_;
     const int prefix = prefix_keep_;
