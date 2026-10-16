@@ -66,7 +66,7 @@ decode, so no inversion search is needed.
 ├── .devcontainer/        # VS Code Dev Container (Ubuntu 24.04 + cross toolchains + zlib)
 ├── cmake/toolchains/     # aarch64 / armhf CMake toolchain files
 ├── external/SDRPlusPlus/ # SDR++ source (scripts/fetch-sdrpp.sh)
-├── scripts/              # fetch-sdrpp.sh, build-all.sh
+├── scripts/              # fetch-sdrpp.sh, build-all.sh, build-windows.ps1, fetch-windows-deps.py
 ├── src/
 │   ├── main.cpp          # SDR++ module + panel
 │   ├── dsp/              # complex, agc, fft, resampler, RRC, PFB clock sync, BPSK demod
@@ -106,18 +106,39 @@ at load time.
 ## Releases
 
 GitHub Actions ([.github/workflows/build.yml](.github/workflows/build.yml))
-builds the plugin for Linux **x86_64**, **x86 (i686)**, **ARM64 (aarch64)** and
-**ARM32 (armhf)** on every push, and attaches the four `.so` files to a GitHub
-Release whenever a `v*` tag is pushed (e.g. `git tag v1.0.0 && git push --tags`).
-zlib is statically linked, so each binary is self-contained.
+builds the plugin for Linux **x86_64**, **x86 (i686)**, **ARM64 (aarch64)**,
+**ARM32 (armhf)** and **Windows x64** on every push and pull request, and
+attaches the four `.so` files and the `.dll` to a GitHub Release whenever a `v*`
+tag is pushed (e.g. `git tag v1.0.0 && git push --tags`). zlib is statically
+linked, so each binary is self-contained.
 
-Windows is currently out of scope: a Windows plugin must link MSVC-built SDR++
-core (the ELF unresolved-symbols approach doesn't apply).
+The Windows job runs `scripts/build-windows.ps1` on `windows-2022`, linking
+against the SDR++ nightly build current at the time of the run.
+
+### Windows (x64, MSVC)
+
+A Windows DLL cannot leave `sdrpp_core` symbols unresolved, so the plugin links
+import libraries generated from the official SDR++ Windows build (nightly,
+which tracks the same `master` commit as the fetched headers). Requirements:
+Visual Studio 2022 or Build Tools with the C++ workload, git, and Python 3.14+.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+# options: -BuildType Debug, -SkipFetch (reuse external/ deps)
+```
+
+The script imports the MSVC environment, runs `scripts/fetch-windows-deps.py`
+(SDR++ Windows zip → `.def` export lists, fftw3/volk headers from
+conda-forge), builds zlib statically, and writes
+`dist\windows-x64\j_alert_decoder.dll`. Copy it into the `modules` folder next
+to `sdrpp.exe`. The DLL must match the SDR++ build it is loaded into; rebuild
+after updating SDR++.
 
 ## Installing into SDR++
 
 Copy `j_alert_decoder.so` into the SDR++ plugin directory (Linux default
-`/usr/lib/sdrpp/plugins/`), or load it from the Module Manager and create an
+`/usr/lib/sdrpp/plugins/`) — on Windows, `j_alert_decoder.dll` into the
+`modules` folder next to `sdrpp.exe` — or load it from the Module Manager and create an
 instance. Tune the VFO onto the J-ALERT carrier; the panel shows lock state, a
 BPSK constellation, carrier/Costas offsets, the estimated bit error rate, HDLC
 frame counts, and the latest decoded alert (title / headline / time). Recovered
@@ -145,7 +166,7 @@ All output settings persist per instance in the SDR++ config.
 | Linux x86_64    | yes       |
 | Linux aarch64   | yes       |
 | Linux armhf     | yes       |
-| Windows         | no        |
+| Windows x64     | yes       |
 | macOS           | no        |
 
 ## License

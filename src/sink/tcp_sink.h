@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,10 @@
 #include "sink/sink.h"
 
 namespace jalert::sink {
+
+// Portable socket handle: a file descriptor on POSIX, a SOCKET on Windows.
+// -1 means "no socket".
+using SockFd = std::intptr_t;
 
 struct TcpSinkSnapshot {
     SinkPhase phase = SinkPhase::Off;
@@ -40,7 +45,7 @@ public:
 private:
     class Client {
     public:
-        Client(int fd, TcpJsonlSink* owner);
+        Client(SockFd fd, TcpJsonlSink* owner);
         ~Client();
         bool is_closed() const { return closed_.load(std::memory_order_acquire); }
         void start();
@@ -49,7 +54,7 @@ private:
 
     private:
         void write_loop();
-        int fd_;
+        SockFd fd_;
         TcpJsonlSink* owner_;
         std::mutex q_gate_;
         std::condition_variable q_cv_;
@@ -65,7 +70,8 @@ private:
 
     mutable std::mutex gate_;
     int port_;
-    int listen_fd_ = -1;
+    SockFd listen_fd_ = -1;
+    bool net_ready_ = false;
     std::thread accepter_;
     std::vector<std::unique_ptr<Client>> clients_;
     std::string status_;

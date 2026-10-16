@@ -108,9 +108,40 @@ jobs:
           path: dist/j_alert_decoder-${{ matrix.target }}.so
           if-no-files-found: error
 
+  # ── Windows: x64 (MSVC) ──────────────────────────────────────────────────────
+  # A PE DLL cannot leave sdrpp_core symbols unresolved, so the plugin links
+  # import libraries generated from the official SDR++ Windows nightly build
+  # (scripts/fetch-windows-deps.py). scripts/build-windows.ps1 imports the MSVC
+  # environment (VS 2022's bundled CMake + Ninja), builds zlib and the plugin.
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # fetch-windows-deps.py needs the stdlib zstd decoder (Python >= 3.14).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -ZlibVersion $env:ZLIB_VERSION
+
+      - name: Collect artefact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-ci | Out-Null
+          Copy-Item dist/windows-x64/j_alert_decoder.dll dist-ci/j_alert_decoder-windows-x64.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist-ci/j_alert_decoder-windows-x64.dll
+          if-no-files-found: error
+
   # ── Publish a GitHub Release with all binaries when a v* tag is pushed ──────
   release:
-    needs: linux
+    needs: [linux, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -119,11 +150,13 @@ jobs:
           path: artifacts
 
       - name: List artefacts
-        run: find artifacts -type f -name '*.so' -print
+        run: find artifacts -type f \( -name '*.so' -o -name '*.dll' \) -print
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.so
+          files: |
+            artifacts/**/*.so
+            artifacts/**/*.dll
           generate_release_notes: true
           fail_on_unmatched_files: true

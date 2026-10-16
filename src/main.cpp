@@ -1,6 +1,7 @@
 #include <imgui.h>
 #include <config.h>
 #include <core.h>
+#include <gui/gui.h>
 #include <gui/style.h>
 #include <gui/widgets/menu.h>
 #include <module.h>
@@ -29,10 +30,6 @@
 #include "sink/tcp_sink.h"
 #include "ui/constellation_view.h"
 #include "ui/sparkline.h"
-
-namespace gui {
-    extern Menu menu;
-}
 
 SDRPP_MOD_INFO{
     /* Name:            */ "j_alert_decoder",

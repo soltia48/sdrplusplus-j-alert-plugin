@@ -64,7 +64,7 @@ NowcastPacket／チャンク解析は完全に構造化されています： `NW
 ├── .devcontainer/        # VS Code Dev Container (Ubuntu 24.04 + クロスツールチェーン + zlib)
 ├── cmake/toolchains/     # aarch64 / armhf CMake ツールチェーンファイル
 ├── external/SDRPlusPlus/ # SDR++ ソース (scripts/fetch-sdrpp.sh)
-├── scripts/              # fetch-sdrpp.sh, build-all.sh
+├── scripts/              # fetch-sdrpp.sh, build-all.sh, build-windows.ps1, fetch-windows-deps.py
 ├── src/
 │   ├── main.cpp          # SDR++ モジュール + パネル
 │   ├── dsp/              # complex, agc, fft, resampler, RRC, PFB clock sync, BPSK demod
@@ -105,17 +105,38 @@ cmake --build build -j
 
 GitHub Actions（[.github/workflows/build.yml](.github/workflows/build.yml)）が
 Linux の **x86_64** / **x86 (i686)** / **ARM64 (aarch64)** / **ARM32 (armhf)**
-向けにプラグインをビルドし、`v*` タグを push するたびに 4 つの `.so` を GitHub
-Release に添付します（例: `git tag v1.0.0 && git push --tags`）。zlib は静的
-リンクされるため、各バイナリは自己完結しています。
+と **Windows x64** 向けに push・プルリクエストごとにプラグインをビルドし、
+`v*` タグを push するたびに 4 つの `.so` と `.dll` を GitHub Release に添付
+します（例: `git tag v1.0.0 && git push --tags`）。zlib は静的リンクされる
+ため、各バイナリは自己完結しています。
 
-Windows は現時点では対象外です（Windows プラグインは MSVC ビルドの SDR++ core
-へのリンクが必須で ELF の未解決シンボル方式が使えないため）。
+Windows ジョブは `windows-2022` 上で `scripts/build-windows.ps1` を実行し、
+実行時点の SDR++ nightly ビルドに対してリンクします。
+
+### Windows（x64、MSVC）
+
+Windows の DLL は `sdrpp_core` のシンボルを未解決のままにできないため、公式
+SDR++ Windows ビルド（取得したヘッダと同じ `master` コミットを追う nightly）
+からインポートライブラリを生成してリンクします。必要なもの: Visual Studio 2022
+または Build Tools（C++ ワークロード）、git、Python 3.14 以上。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+# オプション: -BuildType Debug, -SkipFetch（external/ の依存を再利用）
+```
+
+スクリプトは MSVC 環境の読み込み、`scripts/fetch-windows-deps.py` の実行
+（SDR++ Windows zip → `.def` エクスポート一覧、conda-forge から fftw3/volk
+ヘッダ）、zlib の静的ビルドを行い、`dist\windows-x64\j_alert_decoder.dll`
+を出力します。`sdrpp.exe` と同じ場所の `modules` フォルダへコピーしてください。
+DLL は読み込む SDR++ ビルドと一致している必要があるため、SDR++ 更新後は
+再ビルドしてください。
 
 ## SDR++ へのインストール
 
 `j_alert_decoder.so` を SDR++ のプラグインディレクトリ（Linux 既定
-`/usr/lib/sdrpp/plugins/`）にコピーするか、Module Manager から読み込んで
+`/usr/lib/sdrpp/plugins/`、Windows では `j_alert_decoder.dll` を `sdrpp.exe`
+と同じ場所の `modules` フォルダ）にコピーするか、Module Manager から読み込んで
 インスタンスを作成します。VFO を J-ALERT 搬送波に合わせると、パネルに
 ロック状態、BPSK コンスタレーション、キャリア／Costas オフセット、推定
 ビットエラーレート、HDLC フレーム数、最新の復号アラート（標題／見出し／
@@ -143,7 +164,7 @@ Windows は現時点では対象外です（Windows プラグインは MSVC ビ�
 | Linux x86_64    | あり |
 | Linux aarch64   | あり |
 | Linux armhf     | あり |
-| Windows         | なし |
+| Windows x64     | あり |
 | macOS           | なし |
 
 ## ライセンス

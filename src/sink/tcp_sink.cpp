@@ -3,50 +3,120 @@
 #include <cerrno>
 #include <cstring>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace jalert::sink {
 
 namespace {
-void close_fd(int& fd) {
+#ifdef _WIN32
+using sock_len_t = int;
+constexpr int kShutBoth = SD_BOTH;
+constexpr int kSendFlags = 0;  // Windows never raises SIGPIPE
+
+SOCKET to_os(SockFd fd) { return static_cast<SOCKET>(fd); }
+SockFd from_os(SOCKET s) { return s == INVALID_SOCKET ? -1 : static_cast<SockFd>(s); }
+void close_os(SockFd fd) { ::closesocket(to_os(fd)); }
+
+std::string last_socket_error() {
+    const int code = ::WSAGetLastError();
+    char buf[256] = {};
+    const DWORD n = ::FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
+        static_cast<DWORD>(code), MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT),
+        buf, sizeof(buf), nullptr);
+    std::string msg(buf, n);
+    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == '.'))
+        msg.pop_back();
+    if (msg.empty()) msg = "socket error";
+    return msg + " (WSA " + std::to_string(code) + ")";
+}
+
+// WSAStartup is reference counted; each sink instance holds one reference.
+bool net_init(std::string& err) {
+    WSADATA wsa;
+    const int rc = ::WSAStartup(MAKEWORD(2, 2), &wsa);
+    if (rc != 0) {
+        err = "WSAStartup failed (" + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
+}
+void net_cleanup() { ::WSACleanup(); }
+#else
+using sock_len_t = socklen_t;
+constexpr int kShutBoth = SHUT_RDWR;
+constexpr int kSendFlags = MSG_NOSIGNAL;
+
+int to_os(SockFd fd) { return static_cast<int>(fd); }
+SockFd from_os(int s) { return s < 0 ? -1 : static_cast<SockFd>(s); }
+void close_os(SockFd fd) { ::close(to_os(fd)); }
+std::string last_socket_error() { return std::strerror(errno); }
+bool net_init(std::string&) { return true; }
+void net_cleanup() {}
+#endif
+
+void close_fd(SockFd& fd) {
     if (fd >= 0) {
-        ::shutdown(fd, SHUT_RDWR);
-        ::close(fd);
+        ::shutdown(to_os(fd), kShutBoth);
+        close_os(fd);
         fd = -1;
     }
 }
 } // namespace
 
 TcpJsonlSink::TcpJsonlSink(int port) : port_(port) {
-    listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (!net_init(error_)) {
+        status_ = "error: " + error_;
+        return;
+    }
+    net_ready_ = true;
+#ifdef _WIN32
+    listen_fd_ = from_os(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+#else
+    listen_fd_ = from_os(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
+#endif
     if (listen_fd_ < 0) {
-        error_ = std::strerror(errno);
+        error_ = last_socket_error();
         status_ = "error: " + error_;
         return;
     }
     const int one = 1;
-    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef _WIN32
+    // Windows SO_REUSEADDR lets another process steal the port; bind exclusively.
+    ::setsockopt(to_os(listen_fd_), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                 reinterpret_cast<const char*>(&one), sizeof(one));
+#else
+    ::setsockopt(to_os(listen_fd_), SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(static_cast<uint16_t>(port));
-    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        error_ = std::strerror(errno);
+    if (::bind(to_os(listen_fd_), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        error_ = last_socket_error();
         status_ = "error: " + error_;
-        ::close(listen_fd_);
+        close_os(listen_fd_);
         listen_fd_ = -1;
         return;
     }
-    if (::listen(listen_fd_, 8) < 0) {
-        error_ = std::strerror(errno);
+    if (::listen(to_os(listen_fd_), 8) < 0) {
+        error_ = last_socket_error();
         status_ = "error: " + error_;
-        ::close(listen_fd_);
+        close_os(listen_fd_);
         listen_fd_ = -1;
         return;
     }
@@ -54,7 +124,10 @@ TcpJsonlSink::TcpJsonlSink(int port) : port_(port) {
     accepter_ = std::thread([this] { accept_loop(); });
 }
 
-TcpJsonlSink::~TcpJsonlSink() { stop(); }
+TcpJsonlSink::~TcpJsonlSink() {
+    stop();
+    if (net_ready_) net_cleanup();
+}
 
 std::string TcpJsonlSink::status() const {
     std::lock_guard<std::mutex> lk(gate_);
@@ -77,12 +150,14 @@ TcpSinkSnapshot TcpJsonlSink::snapshot() const {
 void TcpJsonlSink::accept_loop() {
     while (!stop_.load(std::memory_order_acquire)) {
         sockaddr_in peer{};
-        socklen_t plen = sizeof(peer);
-        const int cfd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &plen);
+        sock_len_t plen = sizeof(peer);
+        const SockFd cfd = from_os(
+            ::accept(to_os(listen_fd_), reinterpret_cast<sockaddr*>(&peer), &plen));
         if (cfd < 0) return;
-        if (stop_.load(std::memory_order_acquire)) { ::close(cfd); return; }
+        if (stop_.load(std::memory_order_acquire)) { close_os(cfd); return; }
         const int one = 1;
-        ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        ::setsockopt(to_os(cfd), IPPROTO_TCP, TCP_NODELAY,
+                     reinterpret_cast<const char*>(&one), sizeof(one));
 
         auto client = std::make_unique<Client>(cfd, this);
         Client* raw = client.get();
@@ -129,7 +204,7 @@ void TcpJsonlSink::on_bytes_sent(long long n) {
     bytes_sent_ += n;
 }
 
-TcpJsonlSink::Client::Client(int fd, TcpJsonlSink* owner) : fd_(fd), owner_(owner) {}
+TcpJsonlSink::Client::Client(SockFd fd, TcpJsonlSink* owner) : fd_(fd), owner_(owner) {}
 TcpJsonlSink::Client::~Client() { shutdown(); }
 
 void TcpJsonlSink::Client::start() {
@@ -161,7 +236,12 @@ void TcpJsonlSink::Client::write_loop() {
         const char* data = chunk->data();
         size_t remaining = chunk->size();
         while (remaining > 0) {
-            const ssize_t n = ::send(fd_, data, remaining, MSG_NOSIGNAL);
+#ifdef _WIN32
+            const int want = remaining > 0x7fffffff ? 0x7fffffff : static_cast<int>(remaining);
+            const long long n = ::send(to_os(fd_), data, want, kSendFlags);
+#else
+            const long long n = ::send(to_os(fd_), data, remaining, kSendFlags);
+#endif
             if (n <= 0) {
                 closed_.store(true, std::memory_order_release);
                 return;
