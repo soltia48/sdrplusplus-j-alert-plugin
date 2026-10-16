@@ -95,6 +95,11 @@ bool PfbClockSync::try_emit(Complex32& output) {
         warmed_ = true;
     }
 
+    // A non-finite loop state would make floor(k_) undefined and the arm
+    // normalisation below loop ~2^26 times per sample, stalling the decoder
+    // permanently. Re-initialise instead.
+    if (!std::isfinite(k_) || !std::isfinite(rate_f_)) reset_loop();
+
     const float k_save = k_;
     int count = 0;
     int filtnum = static_cast<int>(std::floor(k_));
@@ -122,7 +127,8 @@ bool PfbClockSync::try_emit(Complex32& output) {
 
     k_ += rate_i_ + rate_f_;
 
-    const float err = (out_re * diff_re + out_im * diff_im) * 0.5f;
+    float err = (out_re * diff_re + out_im * diff_im) * 0.5f;
+    if (!std::isfinite(err)) err = 0.0f;
     error_ = err;
 
     for (int i = 0; i < sps_; ++i) {

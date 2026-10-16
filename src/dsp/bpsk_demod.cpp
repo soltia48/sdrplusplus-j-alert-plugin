@@ -23,7 +23,12 @@ constexpr int    kResampPhases   = 32;
 constexpr int   kAgcWindow = 64;
 constexpr int   kPfbNFilt  = 32;
 constexpr float kPfbLoopBw = 0.01f;
-constexpr float kPfbMaxDev = 1.5f;
+// Limit on the timing loop's fractional-rate integrator. Each symbol advances
+// the filter-arm index by ~5·rate_f, i.e. a symbol-rate error of about
+// 5·rate_f / (nfilt·sps). 0.05 allows ±0.2 % — orders of magnitude more than
+// real modem/SDR clock error — while 1.5 (±5.9 %) let the integrator random-walk
+// far away during a signal gap and false-lock there after the signal returned.
+constexpr float kPfbMaxDev = 0.05f;
 constexpr int   kPfbRrcSym = 12;
 constexpr float kRolloff   = 0.35f;
 
@@ -81,6 +86,13 @@ Complex32 BpskDemod::rotate(Complex32 z, double phase) {
     return Complex32(z.re * c + z.im * s, z.im * c - z.re * s);
 }
 
+void BpskDemod::reset_loops() {
+    sync_.reset_loop();
+    costas_phase_ = costas_freq_ = 0.0;
+    lock_re_ = lock_im_ = 0.0f;
+    locked_ = false;
+}
+
 void BpskDemod::reset() {
     c_blk_.clear();
     c_phase_ = c_omega_ = 0.0;
@@ -109,7 +121,9 @@ void BpskDemod::process(Complex32 z, std::vector<float>& soft_out) {
             c_blk_.clear();
         }
     }
+    if (!std::isfinite(c_omega_)) c_omega_ = 0.0;
     c_phase_ = wrap(c_phase_ + c_omega_);
+    if (!std::isfinite(c_phase_)) c_phase_ = 0.0;
     const Complex32 zc = rotate(z, c_phase_);
     if (debug_tap_in_) debug_tap_in_->push_back(zc);
 
@@ -138,6 +152,11 @@ void BpskDemod::process(Complex32 z, std::vector<float>& soft_out) {
         const double e = static_cast<double>(y.im) * dec;
         costas_freq_ += kCostasFreqGain * e;
         costas_phase_ = wrap(costas_phase_ + costas_freq_ + kCostasPhaseGain * e);
+        if (!std::isfinite(costas_phase_) || !std::isfinite(costas_freq_)) {
+            // A non-finite value would otherwise stick in the loop forever.
+            costas_phase_ = costas_freq_ = 0.0;
+            continue;
+        }
 
         last_sym_ = y;
         ++symbols_;

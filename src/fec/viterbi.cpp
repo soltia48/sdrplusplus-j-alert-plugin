@@ -1,6 +1,7 @@
 #include "viterbi.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace jalert::fec {
@@ -103,6 +104,9 @@ void ViterbiDecoder::acs_step(float r0, float r1, std::vector<uint8_t>& out) {
 }
 
 void ViterbiDecoder::push(float soft, std::vector<uint8_t>& out) {
+    // NaN path metrics never recover (every comparison is false); treat a
+    // non-finite soft value as an erasure.
+    if (!std::isfinite(soft)) soft = 0.0f;
     if (!have_pending_) {
         pending_ = soft;
         have_pending_ = true;

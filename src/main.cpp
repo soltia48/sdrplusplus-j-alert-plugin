@@ -297,6 +297,7 @@ private:
         ImGui::Text("HDLC frames: %lld ok / %lld rejected", fok, fbad);
         ImGui::Text("NowcastPackets: %lld  (status %lld)", pkts, recv_->status_packets());
         ImGui::Text("Files: %lld  decoded %lld", recv_->files(), recv_->alerts());
+        ImGui::Text("Re-acquisitions: %lld", recv_->loop_resets());
 
         ImGui::Separator();
         ImGui::TextUnformatted("Latest alert");
