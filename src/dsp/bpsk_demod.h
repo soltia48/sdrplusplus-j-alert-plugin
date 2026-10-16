@@ -37,6 +37,10 @@ public:
 
     void reset();
 
+    // Re-acquire: snap the timing and Costas loops back to their initial state
+    // (keeps the coarse estimate and filter histories).
+    void reset_loops();
+
     // Debug / manual tuning: pin the coarse carrier offset (Hz) and disable the
     // squaring estimator. Used by the offline harness to isolate stages.
     void set_manual_coarse(double hz);
