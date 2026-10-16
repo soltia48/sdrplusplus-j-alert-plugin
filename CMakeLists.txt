@@ -62,6 +62,36 @@ else ()
     endif ()
 endif ()
 
+# ── Unit tests (no SDR++ runtime needed) ─────────────────────────────────────
+# Each tests/*_test.cpp is one test executable, linked against the decoder and
+# sink sources (everything except the SDR++ module and UI code).
+option(JALERT_BUILD_TESTS "Build unit tests" OFF)
+if (JALERT_BUILD_TESTS)
+    enable_testing()
+    find_package(ZLIB REQUIRED)
+    file(GLOB JALERT_CORE_SRC
+        src/dsp/*.cpp src/fec/*.cpp src/frame/*.cpp src/decode/*.cpp src/sink/*.cpp)
+    add_library(jalert_core STATIC ${JALERT_CORE_SRC})
+    target_include_directories(jalert_core PUBLIC "src/")
+    target_compile_features(jalert_core PUBLIC cxx_std_17)
+    target_link_libraries(jalert_core PUBLIC ZLIB::ZLIB)
+    if (MSVC)
+        target_compile_definitions(jalert_core PUBLIC _USE_MATH_DEFINES)
+        target_compile_options(jalert_core PUBLIC /utf-8)
+    endif ()
+    if (WIN32)
+        target_link_libraries(jalert_core PUBLIC ws2_32)
+    endif ()
+
+    file(GLOB JALERT_TESTS tests/*_test.cpp)
+    foreach (_test IN LISTS JALERT_TESTS)
+        get_filename_component(_name "${_test}" NAME_WE)
+        add_executable(${_name} "${_test}")
+        target_link_libraries(${_name} PRIVATE jalert_core)
+        add_test(NAME ${_name} COMMAND ${_name})
+    endforeach ()
+endif ()
+
 find_package(ZLIB REQUIRED)
 
 # Sources

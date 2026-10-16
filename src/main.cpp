@@ -52,6 +52,9 @@ constexpr double kInputSampleRate = jalert::dsp::BpskDemod::kWorkRate;  // 1.024
 constexpr double kVfoBandwidth = 400000.0;
 constexpr double kPushIntervalSec = 0.5;
 constexpr size_t kRecentAlerts = 32;
+// Coded BER under which the link is clean (≈ 0.00x). A higher BER does not
+// mean no data: the FEC may still correct it and packets can still arrive.
+constexpr float kGoodBer = 0.05f;
 } // namespace
 
 // Lightweight per-file summary kept for the panel (no full XML — that goes to
@@ -131,6 +134,9 @@ public:
 
     void enable() override {
         if (enabled_) return;
+        // Fresh acquisition on re-enable (the DSP thread is stopped here), so
+        // disable/enable recovers the decoder without restarting SDR++.
+        recv_->reset();
         vfo_ = sigpath::vfoManager.createVFO(name_, ImGui::WaterfallVFO::REF_CENTER,
                                              0, kVfoBandwidth, kInputSampleRate,
                                              kVfoBandwidth, kVfoBandwidth, true);
@@ -262,11 +268,14 @@ private:
             last_push_time_ = now;
         }
 
-        // Status lamp + label.
+        // Status lamp + label. "Locked" also needs a low coded BER; a carrier
+        // lock with a high BER is shown separately (it may still decode).
+        const bool low_ber = recv_->ber() < kGoodBer;
         ImU32 lamp;
         const char* label;
         if (!enabled_)      { lamp = IM_COL32(120,120,120,255); label = "Disabled"; }
-        else if (locked)    { lamp = IM_COL32(70,180,85,255);  label = "Locked"; }
+        else if (locked && low_ber) { lamp = IM_COL32(70,180,85,255);  label = "Locked"; }
+        else if (locked)    { lamp = IM_COL32(220,170,40,255); label = "Carrier locked, high BER"; }
         else if (demod.sym_mag() > 0.3f) { lamp = IM_COL32(220,170,40,255); label = "Signal, acquiring"; }
         else                { lamp = IM_COL32(200,70,70,255);  label = "Searching"; }
         ImGui::GetWindowDrawList()->AddCircleFilled(

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 #include "dsp/fft.h"
 
@@ -93,15 +94,25 @@ void BpskDemod::reset_loops() {
     locked_ = false;
 }
 
+// Back to the ctor state, filter histories included, so a receiver poisoned by
+// non-finite input recovers. (A manual coarse offset is cleared too.)
 void BpskDemod::reset() {
     c_blk_.clear();
     c_phase_ = c_omega_ = 0.0;
+    c_manual_ = false;
     resamp_.reset();
-    sync_.reset_loop();
+    agc_.reset();
+    sync_.reset();
     costas_phase_ = costas_freq_ = 0.0;
+    last_sym_ = Complex32();
     sym_mag_ema_ = lock_re_ = lock_im_ = 0.0f;
     locked_ = false;
     symbols_ = 0;
+
+    std::lock_guard<std::mutex> lk(const_mtx_);
+    std::fill(std::begin(const_ring_), std::end(const_ring_), Complex32());
+    const_idx_ = 0;
+    const_count_ = 0;
 }
 
 void BpskDemod::set_manual_coarse(double hz) {
