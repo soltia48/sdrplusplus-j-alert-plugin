@@ -175,8 +175,11 @@ void TcpJsonlSink::Client::write_loop() {
 
 void TcpJsonlSink::Client::shutdown() {
     if (closed_.exchange(true, std::memory_order_acq_rel)) {
+        // The writer flagged the client closed after a send error; once it has
+        // exited, release the socket too (it used to leak here).
         if (writer_.joinable() && std::this_thread::get_id() != writer_.get_id())
             writer_.join();
+        if (!writer_.joinable()) close_fd(fd_);
         return;
     }
     q_cv_.notify_all();
